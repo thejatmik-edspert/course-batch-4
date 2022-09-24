@@ -1,117 +1,130 @@
 package user
 
 import (
+	"errors"
+	"fmt"
+
 	"course/internal/domain"
 
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v4"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
-type UserUsecase struct {
+type UserService struct {
 	db *gorm.DB
 }
 
-func NewUserUsecase(db *gorm.DB) *UserUsecase {
-	return &UserUsecase{
-		db: db,
+func NewUserService(dbConn *gorm.DB) *UserService {
+	return &UserService{
+		db: dbConn,
 	}
 }
 
-func (uu UserUsecase) Register(c *gin.Context) {
+func (us UserService) PostRegister(c *gin.Context) {
 	var user domain.User
-	if err := c.ShouldBind(&user); err != nil {
-		c.JSON(400, map[string]interface{}{
-			"message": "invalid input",
-		})
-		return
-	}
-
-	if user.Name == "" {
-		c.JSON(400, map[string]interface{}{
-			"message": "name cannot be empty",
-		})
-		return
-	}
-
-	if user.Email == "" {
-		c.JSON(400, map[string]interface{}{
-			"message": "email cannot be empty",
-		})
-		return
-	}
-
-	if user.Password == "" {
-		c.JSON(400, map[string]interface{}{
-			"message": "password cannot be empty",
-		})
-		return
-	}
-
-	if len(user.Password) < 6 {
-		c.JSON(400, map[string]interface{}{
-			"message": "password must more thna 6 character",
-		})
-		return
-	}
-
-	if err := user.CreatePassword(user.Password); err != nil {
-		c.JSON(400, map[string]interface{}{
-			"message": "error when create user",
-		})
-		return
-	}
-
-	if err := uu.db.Create(&user).Error; err != nil {
-		c.JSON(500, map[string]interface{}{
-			"message": "error when create user",
-		})
-		return
-	}
-	token, err := user.GenerateToken()
+	// check input
+	err := c.ShouldBindJSON(&user)
 	if err != nil {
-		c.JSON(500, map[string]interface{}{
-			"message": "error when generate user token",
+		c.JSON(400, gin.H{
+			"message": "invalid input",
+			"error":   err.Error(),
 		})
 		return
 	}
-	c.JSON(201, map[string]interface{}{
+
+	fmt.Println(len(user.Password), "pass len")
+	if len(user.Password) < 6 {
+		c.JSON(400, gin.H{
+			"message": "password length must be >6",
+		})
+		return
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	user.Password = string(hash)
+	err = us.db.Create(&user).Error
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "registration failed",
+		})
+		return
+	}
+
+	token, err := user.GenerateJWT()
+	if err != nil {
+		c.JSON(500, gin.H{
+			"message": "error on generating token",
+		})
+		return
+	}
+	c.JSON(201, gin.H{
 		"token": token,
 	})
 }
 
-func (uu UserUsecase) Login(c *gin.Context) {
-	var currentUser domain.User
-	err := c.ShouldBind(&currentUser)
+type login struct {
+	Email    string
+	Password string
+}
+
+func (us UserService) PostLogin(c *gin.Context) {
+	var userRequest login
+	err := c.ShouldBind(&userRequest)
 	if err != nil {
 		c.JSON(400, gin.H{
 			"message": "invalid input",
 		})
 		return
 	}
+	if userRequest.Email == "" || userRequest.Password == "" {
+		c.JSON(400, gin.H{
+			"message": "wrong email/password",
+		})
+		return
+	}
 
 	var user domain.User
-	err = us.db.Where("email = ?", currentUser.Email).Take(&user).Error
-	if err != nil {
-		c.JSON(400, gin.H{
-			"message": "invalid email/password",
-		})
-		return
-	}
-
-	if err := user.ComparePassword(currentUser.Password); err != nil {
-		c.JSON(400, gin.H{
-			"message": "invalid email/password",
-		})
-		return
-	}
-	token, err := user.GenerateToken()
+	err = us.db.Where("email = ?", userRequest.Email).Take(&user).Error
 	if err != nil {
 		c.JSON(500, gin.H{
-			"message": "failed when get user",
+			"message": "wrong email/password",
 		})
 		return
+	}
+	err = user.ComparePassword(userRequest.Password)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "wrong email/password",
+		})
+		return
+	}
+	token, err := user.GenerateJWT()
+	if err != nil {
+		c.JSON(500, gin.H{
+			"message": "error on generating token",
+		})
 	}
 	c.JSON(200, gin.H{
 		"token": token,
 	})
+}
+
+func (us UserService) DecriptJWT(token string) (map[string]interface{}, error) {
+	parsedToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("invalid token")
+		}
+		return domain.SignatureKey, nil
+	})
+
+	data := make(map[string]interface{})
+	if err != nil {
+		return data, err
+	}
+	if !parsedToken.Valid {
+		return data, errors.New("invalid token")
+	}
+	return parsedToken.Claims.(jwt.MapClaims), nil
 }

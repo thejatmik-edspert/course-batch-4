@@ -8,10 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	bearer = "Bearer "
-)
-
 func WithAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")

@@ -1,106 +1,140 @@
 package exercise
 
 import (
-	"course/internal/domain"
+	"context"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
+
+	"course/internal/domain"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
+	gorm "gorm.io/gorm"
 )
 
-type ExerciseUsecase struct {
+type ExerciseService struct {
 	db *gorm.DB
 }
 
-func NewExerciseUsecase(db *gorm.DB) *ExerciseUsecase {
-	return &ExerciseUsecase{
-		db: db,
+func NewExerciseService(dbConn *gorm.DB) *ExerciseService {
+	return &ExerciseService{
+		db: dbConn,
 	}
 }
 
-func (eu ExerciseUsecase) GetExercise(c *gin.Context) {
-	stringID := c.Param("id")
-	exerciseID, err := strconv.Atoi(stringID)
+func (es ExerciseService) CreateExercise(c *gin.Context) {
+	var exerciseRequest domain.ExerciseRequest
+	err := c.ShouldBindJSON(&exerciseRequest)
 	if err != nil {
-		c.JSON(400, map[string]interface{}{
-			"message": "invalid input id",
+		c.JSON(400, gin.H{
+			"message": "invalid input",
+			"error":   err.Error(),
 		})
 		return
 	}
 
-	var exercise domain.Exercise
-	err = eu.db.Where("id = ?", exerciseID).Preload("Questions").Find(&exercise).Error
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tx := es.db.Begin()
+	defer tx.Rollback()
+	query := `
+	INSERT INTO ` + "`exercises`" + `(title, description)
+	VALUES (?, ?)
+	`
+	result, err := tx.ConnPool.ExecContext(ctx, query, exerciseRequest.Title, exerciseRequest.Description)
 	if err != nil {
-		c.JSON(404, map[string]interface{}{
-			"message": "not found",
+		c.JSON(500, gin.H{
+			"message": "unable to create Exercise",
 		})
 		return
 	}
-	c.JSON(200, exercise)
-}
-
-func (eu ExerciseUsecase) GetScore(c *gin.Context) {
-	stringID := c.Param("id")
-	exerciseID, err := strconv.Atoi(stringID)
+	tx.Commit()
+	id, err := result.LastInsertId()
 	if err != nil {
-		c.JSON(400, map[string]interface{}{
-			"message": "invalid input id",
-		})
-		return
-	}
-
-	var exercise domain.Exercise
-	err = eu.db.Where("id = ?", exerciseID).Preload("Questions").Find(&exercise).Error
-	if err != nil {
-		c.JSON(404, map[string]interface{}{
-			"message": "not found",
+		c.JSON(500, gin.H{
+			"message": "error",
 		})
 		return
 	}
 
-	userID := c.Request.Context().Value("user_id").(int)
-
-	var answers []domain.Answer
-	err = eu.db.Where("exercise_id = ? AND user_id = ?", exerciseID, userID).Find(&answers).Error
-	if err != nil {
-		c.JSON(404, map[string]interface{}{
-			"message": "not answered yet",
-		})
-		return
-	}
-
-	// calculate answer
-	mapQA := make(map[int]domain.Answer)
-	for _, answer := range answers {
-		mapQA[answer.QuestionID] = answer
-	}
-
-	var score Score
-	wg := new(sync.WaitGroup)
-	for _, question := range exercise.Questions {
-		wg.Add(1)
-		go func(question domain.Question) {
-			defer wg.Done()
-			if strings.EqualFold(question.CorrectAnswer, mapQA[question.ID].Answer) {
-				score.Inc(question.Score)
-			}
-		}(question)
-	}
-	wg.Wait()
-	c.JSON(200, map[string]interface{}{
-		"score": score.totalScore,
+	c.JSON(201, gin.H{
+		"id":          id,
+		"title":       exerciseRequest.Title,
+		"description": exerciseRequest.Description,
 	})
 }
 
-type Score struct {
-	totalScore int
-	mu         sync.Mutex
+func (es ExerciseService) GetExerciseScoreByID(c *gin.Context) {
+	paramID := c.Param("id")
+	id, err := strconv.Atoi(paramID)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "invalid exercise id",
+		})
+		return
+	}
+
+	var exercise domain.Exercise
+	err = es.db.Where("id = ?", id).Preload("Question").Take(&exercise).Error
+	if err != nil || len(exercise.Question) == 0 {
+		c.JSON(404, gin.H{
+			"message": "exercise not found",
+		})
+		return
+	}
+
+	var score int = 0
+	var answers []domain.Answer
+	ctx := c.Request.Context()
+	userID := int(ctx.Value("user_id").(float64))
+
+	err = es.db.Where("exercise_id = ? AND user_id = ?", exercise.ID, userID).Find(&answers).Error
+	if err != nil {
+		c.JSON(200, gin.H{
+			"score": score,
+		})
+		return
+	}
+
+	// loop on each questions ?
+	mapQA := make(map[int]string)
+	for _, answer := range answers {
+		mapQA[answer.QuestionID] = answer.Answer
+	}
+
+	for _, question := range exercise.Question {
+		answer := mapQA[question.ID]
+		correctAnswer := question.CorrectAnswer
+		if strings.EqualFold(answer, correctAnswer) {
+			score = score + question.Score
+		}
+	}
+
+	c.JSON(200, gin.H{
+		"score": score,
+	})
 }
 
-func (s *Score) Inc(value int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.totalScore += value
+func (es ExerciseService) GetExerciseByID(c *gin.Context) {
+	paramID := c.Param("id")
+	id, err := strconv.Atoi(paramID)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "invalid execise id",
+		})
+		return
+	}
+
+	var exercise domain.Exercise
+	// err = es.db.Where("id = ?", id).Take(&exercise).Error
+	err = es.db.Where("id = ?", id).Preload("Question").Take(&exercise).Error
+	if err != nil {
+		c.JSON(404, gin.H{
+			"message": "exercise not found",
+		})
+		return
+	}
+
+	c.JSON(200, exercise)
 }

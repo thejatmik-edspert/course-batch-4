@@ -1,9 +1,11 @@
 package main
 
 import (
+	"course/internal/answer"
 	"course/internal/database"
 	"course/internal/exercise"
 	"course/internal/middleware"
+	"course/internal/question"
 	"course/internal/user"
 
 	"github.com/gin-gonic/gin"
@@ -17,13 +19,24 @@ func main() {
 		})
 	})
 	db := database.CreateConn()
-	exercise := exercise.NewExerciseUsecase(db)
-	// exercise endpoint
-	r.GET("/exercises/:id", middleware.WithAuth(), exercise.GetExercise)
-	r.GET("/exercises/:id/scores", middleware.WithLog(), middleware.WithAuth(), exercise.GetScore)
 
 	// user endpoint
-	userUsecase := user.NewUserUsecase(db)
-	r.POST("/register", userUsecase.Register)
+	user := user.NewUserService(db)
+	r.POST("/register", user.PostRegister)
+	r.POST("/login", user.PostLogin)
+
+	// exercise endpoint
+	exercise := exercise.NewExerciseService(db)
+	r.GET("/exercises/:id", middleware.UseClaims(user), exercise.GetExerciseByID)
+	r.GET("/exercises/:id/scores", middleware.UseClaims(user), exercise.GetExerciseScoreByID)
+	r.POST("/exercises", middleware.UseClaims(user), exercise.CreateExercise)
+
+	// question endpoint
+	question := question.NewQuestionService(db)
+	r.POST("/exercises/:id/questions", middleware.UseClaims(user), question.CreateQuestion)
+
+	// answer endpoint
+	answer := answer.NewAnswerServie(db)
+	r.POST("/exercises/:id/questions/:qid/answer", middleware.UseClaims(user), answer.CreateAnswer)
 	r.Run(":1234")
 }

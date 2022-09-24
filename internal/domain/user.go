@@ -1,59 +1,41 @@
 package domain
 
 import (
-	"errors"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	jwt "github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var signatureKey = []byte("myPrivateKey")
+var SignatureKey = []byte("leleyeye")
 
 type User struct {
-	ID        int
-	Name      string
-	Email     string
-	Password  string
-	NoHp      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID        int       `json:"id"`
+	Name      string    `json:"name"     binding:"required"`
+	Email     string    `json:"email"    binding:"required,email"`
+	Password  string    `json:"password" binding:"required"`
+	NoHP      string    `json:"no_hp"    binding:"required,numeric"`
+	CreatedAt time.Time `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
-func (u *User) CreatePassword(password string) error {
-	encryptedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	u.Password = string(encryptedPassword)
-	return nil
-}
-
-func (u *User) GenerateToken() (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+func (u *User) GenerateJWT() (string, error) {
+	claims := jwt.MapClaims{
 		"user_id": u.ID,
-		"exp":     time.Now().Add(24 * time.Hour).Unix(),
-		"iss":     "edspert",
-	})
-
-	tokenString, err := token.SignedString(signatureKey)
-	return tokenString, err
-}
-
-func (u *User) DecryptJwt(token string) (map[string]interface{}, error) {
-	parsedToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("auth invalid")
-		}
-		return signatureKey, nil
-	})
-
-	if err != nil || !parsedToken.Valid {
-		return map[string]interface{}{}, errors.New("auth invalid")
+		"exp":     time.Now().Add(time.Hour * 24).Unix(),
+		"iss":     "lele",
 	}
-	return parsedToken.Claims.(jwt.MapClaims), nil
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(SignatureKey)
+	if err != nil {
+		return "", err
+	}
+	return tokenString, nil
 }
 
-func (u User) ComparePassword(password string) error {
-	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+func (u *User) ComparePassword(input string) error {
+	return bcrypt.CompareHashAndPassword(
+		[]byte(u.Password), []byte(input),
+	)
 }
