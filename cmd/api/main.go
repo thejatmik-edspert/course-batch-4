@@ -7,6 +7,8 @@ import (
 	"course/internal/middleware"
 	"course/internal/question"
 	"course/internal/user"
+	"fmt"
+	"os"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,5 +40,10 @@ func main() {
 	// answer endpoint
 	answer := answer.NewAnswerServie(db)
 	r.POST("/exercises/:id/questions/:qid/answer", middleware.UseClaims(user), answer.CreateAnswer)
-	r.Run(":1234")
+
+	appPort := os.Getenv("APP_PORT")
+	if appPort == "" {
+		appPort = "1234"
+	}
+	r.Run(fmt.Sprintf(":%s", appPort))
 }
